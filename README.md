@@ -4,6 +4,10 @@ Convert AI chat session logs into readable HTML reports.
 
 chat-to-html takes JSONL log files from AI coding assistants and generates standalone HTML pages with syntax highlighting, tool call visualization, token usage statistics, and filtering controls.
 
+## Examples
+![Claude sample report](images/claude.png)
+![Codex sample report](images/codex.png)
+
 ## Supported Formats
 
 - **Claude Code** - Claude's CLI assistant logs
@@ -103,20 +107,9 @@ node dist/index.js examples/claude.jsonl examples/codex.jsonl
 - `examples/claude.jsonl` - Claude Code CLI session
 - `examples/codex.jsonl` - OpenAI Codex CLI session
 
-## Viewing Reports
-
-The generated HTML files are self-contained and can be opened directly in any browser. No server required.
-
-For quick local preview, you can use Python's built-in server:
-
-```bash
-python3 -m http.server 3000
-# Then open http://localhost:3000/your-file.html
-```
-
 ## Example Output
 
-The HTML report includes:
+The HTML includes:
 
 - **Header** - Session ID, model, version, working directory, git branch, message count
 - **Token Summary** - Total input/output tokens with cache statistics
@@ -125,4 +118,4 @@ The HTML report includes:
 
 ## License
 
-ISC
+MIT

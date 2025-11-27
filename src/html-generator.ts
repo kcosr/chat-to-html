@@ -202,7 +202,14 @@ function renderContent(item: MessageContent): string {
   switch (item.type) {
     case 'text':
       if (!item.text) return '';
-      return `<div class="message-text">${parseMarkdown(item.text)}</div>`;
+      return `
+        <div class="message-text">
+          <div class="markdown-view">
+            ${parseMarkdown(item.text)}
+          </div>
+          <pre class="plain-view">${escapeHtml(item.text)}</pre>
+        </div>
+      `;
 
     case 'tool_use':
       if (!item.toolCall) return '';
@@ -213,6 +220,10 @@ function renderContent(item: MessageContent): string {
             <i class="bi bi-wrench"></i>
             <span class="tool-name">${escapeHtml(tc.name)}</span>
             <span class="tool-id">${escapeHtml(tc.id)}</span>
+            <button class="tool-expand-toggle" type="button" aria-expanded="false">
+              <i class="bi bi-chevron-down"></i>
+              <span class="tool-expand-label">Expand</span>
+            </button>
           </div>
           ${renderToolInput(tc.input)}
         </div>
@@ -227,6 +238,10 @@ function renderContent(item: MessageContent): string {
             <i class="bi bi-box-arrow-right"></i>
             <span class="result-label">Result</span>
             <span class="tool-id">${escapeHtml(tr.toolUseId)}</span>
+            <button class="tool-expand-toggle" type="button" aria-expanded="false">
+              <i class="bi bi-chevron-down"></i>
+              <span class="tool-expand-label">Expand</span>
+            </button>
           </div>
           ${renderToolResult(tr.content)}
         </div>
@@ -533,6 +548,14 @@ function getStyles(theme?: ThemeConfig): string {
       line-height: 1.5;
     }
 
+    .message-text .plain-view {
+      white-space: pre-wrap;
+      font-family: var(--font-code);
+      font-size: 0.9rem;
+      margin: 0;
+      display: none;
+    }
+
     .message-text p {
       margin: 0 0 0.5em 0;
     }
@@ -664,7 +687,7 @@ function getStyles(theme?: ThemeConfig): string {
       font-family: var(--font-code);
       font-size: 0.7rem;
       color: var(--text-secondary);
-      margin-left: auto;
+      margin-left: 8px;
     }
 
     .tool-input {
@@ -679,6 +702,11 @@ function getStyles(theme?: ThemeConfig): string {
       color: var(--text-primary);
       max-height: 300px;
       overflow-y: auto;
+    }
+
+    .tool-call.expanded .tool-input,
+    .tool-result-container.expanded .tool-result {
+      max-height: none;
     }
 
     .tool-result {
@@ -706,6 +734,30 @@ function getStyles(theme?: ThemeConfig): string {
       background: transparent;
       max-height: none;
       overflow-y: visible;
+    }
+
+    .tool-expand-toggle {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      font-size: 0.75rem;
+      background: transparent;
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .tool-expand-toggle:hover {
+      background: var(--bg-overlay-dark);
+      color: var(--text-primary);
+    }
+
+    .tool-expand-toggle i {
+      font-size: 0.9rem;
     }
 
     /* Scrollbar styling */
@@ -1027,6 +1079,11 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
           <i class="bi bi-gear"></i>
           <span>Harness</span>
         </label>
+        <label class="filter-toggle mode-toggle active" id="markdown-toggle">
+          <input type="checkbox" checked>
+          <i class="bi bi-markdown"></i>
+          <span>Markdown</span>
+        </label>
       </div>
       <div class="search-box">
         <i class="bi bi-search"></i>
@@ -1058,6 +1115,7 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
       const searchInput = document.getElementById('search-input');
       const searchClear = document.getElementById('search-clear');
       const searchBox = searchInput.parentElement;
+      let markdownEnabled = true;
 
       function applyFilters() {
         const term = searchTerm.toLowerCase();
@@ -1112,7 +1170,7 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
         });
       }
 
-      document.querySelectorAll('.filter-toggle').forEach(function(toggle) {
+      document.querySelectorAll('.filter-toggle[data-filter]').forEach(function(toggle) {
         toggle.addEventListener('click', function(e) {
           e.preventDefault();
           var filterType = this.getAttribute('data-filter');
@@ -1121,6 +1179,36 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
           applyFilters();
         });
       });
+
+      function applyMarkdownMode() {
+        document.querySelectorAll('.message-text').forEach(function(container) {
+          var markdownView = container.querySelector('.markdown-view');
+          var plainView = container.querySelector('.plain-view');
+          if (!markdownView || !plainView) return;
+
+          if (markdownEnabled) {
+            markdownView.style.display = 'block';
+            plainView.style.display = 'none';
+          } else {
+            markdownView.style.display = 'none';
+            plainView.style.display = 'block';
+          }
+        });
+      }
+
+      var markdownToggle = document.getElementById('markdown-toggle');
+      if (markdownToggle) {
+        markdownToggle.addEventListener('click', function(e) {
+          e.preventDefault();
+          markdownEnabled = !markdownEnabled;
+          markdownToggle.classList.toggle('active', markdownEnabled);
+          var input = markdownToggle.querySelector('input');
+          if (input) {
+            input.checked = markdownEnabled;
+          }
+          applyMarkdownMode();
+        });
+      }
 
       // Search input
       searchInput.addEventListener('input', function() {
@@ -1155,6 +1243,51 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
       document.getElementById('scroll-bottom').addEventListener('click', function() {
         window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
       });
+
+      // Tool expand/collapse
+      function setupExpandToggles() {
+        document.querySelectorAll('.tool-expand-toggle').forEach(function(btn) {
+          var container = btn.closest('.tool-call, .tool-result-container');
+          if (!container) return;
+
+          var content = container.querySelector('.tool-input, .tool-result');
+          if (!content) {
+            btn.style.display = 'none';
+            return;
+          }
+
+          // Only show expand button when content actually overflows
+          var needsExpand = content.scrollHeight > content.clientHeight + 1;
+          if (!needsExpand) {
+            btn.style.display = 'none';
+            return;
+          }
+
+          btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var expanded = container.classList.toggle('expanded');
+            btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+
+            var icon = btn.querySelector('i');
+            var label = btn.querySelector('.tool-expand-label');
+            if (icon) {
+              icon.classList.toggle('bi-chevron-down', !expanded);
+              icon.classList.toggle('bi-chevron-up', expanded);
+            }
+            if (label) {
+              label.textContent = expanded ? 'Collapse' : 'Expand';
+            }
+          });
+        });
+      }
+
+      if (document.readyState === 'complete') {
+        setupExpandToggles();
+      } else {
+        window.addEventListener('load', setupExpandToggles);
+      }
+
+      applyMarkdownMode();
     })();
   </script>
 </body>
