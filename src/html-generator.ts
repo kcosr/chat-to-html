@@ -438,11 +438,12 @@ function getStyles(theme?: ThemeConfig): string {
   const textMuted = theme?.textMuted || '#a0a0a0';
   const border = theme?.border || '#383838';
 
-  // Accent colors - saturated but not bright
-  const accentUser = theme?.accentUser || '#6aaddb';
-  const accentAssistant = theme?.accentAssistant || '#5eb86a';
-  const accentTool = theme?.accentTool || '#d97855';
-  const accentResult = theme?.accentResult || '#b085c9';
+  // Accent colors - warm, muted earth tones
+  const accentUser = theme?.accentUser || '#db7c2c';
+  const accentAssistant = theme?.accentAssistant || '#e29d33';
+  const accentTool = theme?.accentTool || '#c5b357';
+  const accentResult = theme?.accentResult || '#76854a';
+  const accentThinking = '#0C4767';
 
   // Font families with fallbacks
   const defaultUiFont = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif";
@@ -484,6 +485,7 @@ function getStyles(theme?: ThemeConfig): string {
       --accent-assistant: ${accentAssistant};
       --accent-tool: ${accentTool};
       --accent-tool-result: ${accentResult};
+      --accent-thinking: ${accentThinking};
 
       /* Border */
       --border-color: ${border};
@@ -765,7 +767,7 @@ function getStyles(theme?: ThemeConfig): string {
 
     .thinking-text {
       font-style: italic;
-      color: var(--text-secondary);
+      color: var(--accent-thinking);
     }
 
     .message-usage {
@@ -1013,8 +1015,8 @@ function getStyles(theme?: ThemeConfig): string {
     }
 
     .filter-toggle.active.thinking-toggle {
-      background: var(--text-secondary);
-      border-color: var(--text-secondary);
+      background: var(--accent-thinking);
+      border-color: var(--accent-thinking);
     }
 
     .filter-toggle input {
