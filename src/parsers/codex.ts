@@ -22,44 +22,54 @@ interface CodexTextContent {
   text: string;
 }
 
-interface CodexFunctionCall {
-  type: 'function_call';
-  name: string;
-  arguments: string;
-  call_id: string;
-}
-
-interface CodexFunctionCallOutput {
-  type: 'function_call_output';
-  call_id: string;
-  output: string;
-}
-
-type CodexContent = CodexTextContent | CodexFunctionCall | CodexFunctionCallOutput;
+type CodexContent = CodexTextContent;
 
 interface CodexResponseItem {
   type: 'response_item';
   timestamp: string;
   payload: {
-    type: 'message' | 'function_call' | 'function_call_output';
+    type: string;
     role?: 'user' | 'assistant';
     content?: CodexContent[];
     name?: string;
     arguments?: string;
     call_id?: string;
     output?: string;
+    status?: string;
+    input?: string;
+    summary?: { type: string; text: string }[];
+    encrypted_content?: string;
   };
 }
 
-interface CodexEntry {
+interface CodexEventEntry {
+  type: 'event_msg';
+  timestamp: string;
+  payload?: {
+    type?: string;
+    message?: string;
+    text?: string;
+    info?: {
+      total_token_usage?: {
+        input_tokens: number;
+        cached_input_tokens: number;
+        output_tokens: number;
+        reasoning_output_tokens?: number;
+        total_tokens: number;
+      };
+    };
+  };
+}
+
+interface CodexEntryBase {
   type: string;
   timestamp: string;
   payload?: unknown;
 }
 
-interface CodexTokenCountEvent {
-  type: 'event_msg';
-  timestamp: string;
+type CodexEntry = CodexResponseItem | CodexEventEntry | CodexEntryBase;
+
+interface CodexTokenCountEvent extends CodexEventEntry {
   payload: {
     type: 'token_count';
     info?: {
@@ -99,11 +109,6 @@ export class CodexParser implements Parser {
     const version = metaEntry?.payload?.cli_version;
     const gitBranch = metaEntry?.payload?.git?.branch;
 
-    // Get response items (messages and function calls)
-    const responseItems = entries.filter(
-      (e): e is CodexResponseItem => e.type === 'response_item'
-    );
-
     // Extract token usage from the last token_count event
     const tokenCountEvents = entries.filter(
       (e): e is CodexTokenCountEvent =>
@@ -121,82 +126,168 @@ export class CodexParser implements Parser {
     };
 
     const messages: ChatMessage[] = [];
-    const functionCalls: Map<string, { name: string; args: string; timestamp: string }> = new Map();
 
-    // Track user message count for harness filtering
+    const identifyHarness = options?.identifyHarness !== false;
     let userMessageCount = 0;
 
-    for (const item of responseItems) {
-      const payload = item.payload;
+    for (const entry of entries) {
+      if (entry.type === 'response_item') {
+        const item = entry as CodexResponseItem;
+        const payload = item.payload;
 
-      // Handle message types
-      if (payload.type === 'message' && payload.role && payload.content) {
-        // Track user messages for harness identification
-        let isHarness = false;
-        if (payload.role === 'user') {
-          userMessageCount++;
-          if (options?.identifyHarness && userMessageCount <= 2) {
-            isHarness = true;
+        if (payload.type === 'message' && payload.role && payload.content) {
+          let isHarness = false;
+          if (payload.role === 'user') {
+            userMessageCount++;
+            if (identifyHarness && userMessageCount <= 2) {
+              isHarness = true;
+            }
+          }
+
+          const content = this.parseContent(payload.content);
+          if (content.length > 0) {
+            const message: ChatMessage = {
+              id: item.timestamp,
+              role: payload.role,
+              content,
+              timestamp: item.timestamp,
+            };
+            if (isHarness) {
+              message.isHarness = true;
+            }
+            messages.push(message);
           }
         }
 
-        const content = this.parseContent(payload.content);
-        if (content.length > 0) {
+        if (payload.type === 'function_call' && payload.name && payload.call_id) {
+          let parsedArgs: Record<string, unknown> = {};
+          try {
+            parsedArgs = JSON.parse(payload.arguments || '{}');
+          } catch {
+            parsedArgs = { raw: payload.arguments };
+          }
+
           messages.push({
             id: item.timestamp,
-            role: payload.role,
-            content,
+            role: 'assistant',
+            content: [{
+              type: 'tool_use',
+              toolCall: {
+                id: payload.call_id,
+                name: payload.name,
+                input: parsedArgs,
+              },
+            }],
             timestamp: item.timestamp,
-            ...(isHarness && { isHarness: true }),
           });
         }
-      }
 
-      // Handle function calls (tool use)
-      if (payload.type === 'function_call' && payload.name && payload.call_id) {
-        functionCalls.set(payload.call_id, {
-          name: payload.name,
-          args: payload.arguments || '{}',
-          timestamp: item.timestamp,
-        });
-
-        // Add as assistant message with tool call
-        let parsedArgs: Record<string, unknown> = {};
-        try {
-          parsedArgs = JSON.parse(payload.arguments || '{}');
-        } catch {
-          parsedArgs = { raw: payload.arguments };
+        if (payload.type === 'function_call_output' && payload.call_id) {
+          messages.push({
+            id: item.timestamp,
+            role: 'user',
+            content: [{
+              type: 'tool_result',
+              toolResult: {
+                toolUseId: payload.call_id,
+                content: payload.output || '',
+              },
+            }],
+            timestamp: item.timestamp,
+          });
         }
 
-        messages.push({
-          id: item.timestamp,
-          role: 'assistant',
-          content: [{
-            type: 'tool_use',
-            toolCall: {
-              id: payload.call_id,
-              name: payload.name,
-              input: parsedArgs,
-            },
-          }],
-          timestamp: item.timestamp,
-        });
-      }
+        if (payload.type === 'custom_tool_call' && payload.call_id) {
+          let parsedInput: Record<string, unknown> = {};
+          if (typeof payload.input === 'string' && payload.input.length > 0) {
+            try {
+              parsedInput = JSON.parse(payload.input);
+            } catch {
+              parsedInput = { raw: payload.input };
+            }
+          }
 
-      // Handle function call outputs (tool results)
-      if (payload.type === 'function_call_output' && payload.call_id) {
-        messages.push({
-          id: item.timestamp,
-          role: 'user',
-          content: [{
-            type: 'tool_result',
-            toolResult: {
-              toolUseId: payload.call_id,
-              content: payload.output || '',
-            },
-          }],
-          timestamp: item.timestamp,
-        });
+          messages.push({
+            id: item.timestamp,
+            role: 'assistant',
+            content: [{
+              type: 'tool_use',
+              toolCall: {
+                id: payload.call_id,
+                name: payload.name || 'custom_tool_call',
+                input: parsedInput,
+              },
+            }],
+            timestamp: item.timestamp,
+          });
+        }
+
+        if (payload.type === 'custom_tool_call_output' && payload.call_id) {
+          let contentText = payload.output || '';
+          if (contentText) {
+            try {
+              const parsed = JSON.parse(contentText);
+              if (typeof parsed === 'string') {
+                contentText = parsed;
+              } else if (parsed && typeof parsed === 'object' && 'output' in parsed && typeof (parsed as { output?: unknown }).output === 'string') {
+                contentText = (parsed as { output: string }).output;
+              } else {
+                contentText = JSON.stringify(parsed, null, 2);
+              }
+            } catch {
+              // leave contentText as-is if it isn't valid JSON
+            }
+          }
+
+          messages.push({
+            id: item.timestamp,
+            role: 'user',
+            content: [{
+              type: 'tool_result',
+              toolResult: {
+                toolUseId: payload.call_id,
+                content: contentText,
+              },
+            }],
+            timestamp: item.timestamp,
+          });
+        }
+
+        if (payload.type === 'reasoning') {
+          // Skip reasoning response_items; we render the corresponding
+          // agent_reasoning event_msg entries instead to avoid duplicates.
+          continue;
+        }
+      } else if (entry.type === 'event_msg') {
+        const event = entry as CodexEventEntry;
+        const payload = event.payload;
+        if (!payload || typeof payload.type !== 'string') {
+          continue;
+        }
+
+        if (payload.type === 'token_count') {
+          continue;
+        }
+
+        if (payload.type === 'user_message' || payload.type === 'agent_message') {
+          continue;
+        }
+
+        if (payload.type === 'agent_reasoning' && payload.text) {
+          const message: ChatMessage = {
+            id: event.timestamp,
+            role: identifyHarness ? 'system' : 'assistant',
+            content: [{
+              type: 'thinking',
+              text: payload.text,
+            }],
+            timestamp: event.timestamp,
+          };
+          if (identifyHarness) {
+            message.isHarness = true;
+          }
+          messages.push(message);
+        }
       }
     }
 

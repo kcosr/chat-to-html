@@ -1,4 +1,16 @@
-import { ChatSession, ChatMessage, MessageContent, TokenUsage, ThemeConfig } from './types.js';
+import { ChatSession, ChatMessage, MessageContent, TokenUsage, ThemeConfig, getTotalTokens } from './types.js';
+
+interface RenderMessage {
+  id: string;
+  role: ChatMessage['role'];
+  content: MessageContent[];
+  timestamp: string;
+  model?: string;
+  usage?: TokenUsage;
+  isHarness?: boolean;
+  kind: 'normal' | 'tool_call' | 'tool_result';
+  parentId?: string;
+}
 
 function escapeHtml(text: string): string {
   return text
@@ -158,7 +170,7 @@ function formatTimestamp(ts: string): string {
   return date.toLocaleString();
 }
 
-function renderTokenUsage(usage: TokenUsage): string {
+function renderTokenUsage(usage: TokenUsage, source?: 'claude' | 'codex' | 'gemini' | 'unknown'): string {
   const parts: string[] = [];
   parts.push(`<span class="token-stat"><span class="label">Input:</span> ${formatNumber(usage.inputTokens)}</span>`);
   parts.push(`<span class="token-stat"><span class="label">Output:</span> ${formatNumber(usage.outputTokens)}</span>`);
@@ -170,7 +182,8 @@ function renderTokenUsage(usage: TokenUsage): string {
     parts.push(`<span class="token-stat"><span class="label">Cache Read:</span> ${formatNumber(usage.cacheReadTokens)}</span>`);
   }
 
-  const total = usage.inputTokens + usage.outputTokens;
+  // Calculate total based on source using shared function
+  const total = getTotalTokens(usage, source || 'unknown');
   parts.push(`<span class="token-stat total"><span class="label">Total:</span> ${formatNumber(total)}</span>`);
 
   return parts.join('');
@@ -198,6 +211,86 @@ function renderToolResult(content: string): string {
   return `<pre class="tool-result">${escapeHtml(content)}</pre>`;
 }
 
+function flattenMessages(messages: ChatMessage[]): RenderMessage[] {
+  const flattened: RenderMessage[] = [];
+
+  for (const msg of messages) {
+    const base = {
+      id: msg.id,
+      role: msg.role,
+      timestamp: msg.timestamp,
+      model: msg.model,
+      isHarness: msg.isHarness,
+    };
+
+    const originalUsage = msg.usage;
+    let usageAttached = false;
+
+    const attachUsage = (): TokenUsage | undefined => {
+      if (!usageAttached && originalUsage) {
+        usageAttached = true;
+        return originalUsage;
+      }
+      return undefined;
+    };
+
+    if (!msg.content || msg.content.length === 0) {
+      flattened.push({
+        ...base,
+        content: [],
+        usage: attachUsage(),
+        kind: 'normal',
+      });
+      continue;
+    }
+
+    let buffer: MessageContent[] = [];
+    let toolIndex = 0;
+
+    const flushBuffer = () => {
+      if (buffer.length === 0) return;
+      flattened.push({
+        ...base,
+        content: buffer,
+        usage: attachUsage(),
+        kind: 'normal',
+      });
+      buffer = [];
+    };
+
+    for (const item of msg.content) {
+      if (item.type === 'tool_use' || item.type === 'tool_result') {
+        flushBuffer();
+
+        const kind = item.type === 'tool_use' ? 'tool_call' : 'tool_result';
+        const toolId =
+          item.type === 'tool_use'
+            ? item.toolCall?.id
+            : item.toolResult?.toolUseId;
+        const segmentId = toolId
+          ? `${msg.id}:${kind}:${toolId}`
+          : `${msg.id}:${kind}:${toolIndex}`;
+
+        flattened.push({
+          ...base,
+          id: segmentId,
+          content: [item],
+          usage: attachUsage(),
+          kind,
+          parentId: msg.id,
+        });
+        toolIndex++;
+      } else {
+        buffer.push(item);
+      }
+    }
+
+    flushBuffer();
+  }
+
+  return flattened;
+}
+
 function renderContent(item: MessageContent): string {
   switch (item.type) {
     case 'text':
@@ -211,13 +304,23 @@ function renderContent(item: MessageContent): string {
         </div>
       `;
 
+    case 'thinking':
+      if (!item.text) return '';
+      return `
+        <div class="message-text thinking-text">
+          <div class="markdown-view">
+            ${parseMarkdown(item.text)}
+          </div>
+          <pre class="plain-view">${escapeHtml(item.text)}</pre>
+        </div>
+      `;
+
     case 'tool_use':
       if (!item.toolCall) return '';
       const tc = item.toolCall;
       return `
         <div class="tool-call">
           <div class="tool-header">
-            <i class="bi bi-wrench"></i>
             <span class="tool-name">${escapeHtml(tc.name)}</span>
             <span class="tool-id">${escapeHtml(tc.id)}</span>
             <button class="tool-expand-toggle" type="button" aria-expanded="false">
@@ -235,7 +338,6 @@ function renderContent(item: MessageContent): string {
       return `
         <div class="tool-result-container">
           <div class="tool-result-header">
-            <i class="bi bi-box-arrow-right"></i>
             <span class="result-label">Result</span>
             <span class="tool-id">${escapeHtml(tr.toolUseId)}</span>
             <button class="tool-expand-toggle" type="button" aria-expanded="false">
@@ -252,18 +354,37 @@ function renderContent(item: MessageContent): string {
   }
 }
 
-function renderMessage(msg: ChatMessage): string {
+function renderMessage(msg: RenderMessage, source?: 'claude' | 'codex' | 'gemini' | 'unknown'): string {
   const isHarness = msg.isHarness === true;
+  const hasThinking = msg.content.some(item => item.type === 'thinking');
+  const isToolCallMessage = msg.kind === 'tool_call';
+  const isToolResultMessage = msg.kind === 'tool_result';
   const roleClass = isHarness ? 'harness' : (msg.role === 'assistant' ? 'assistant' : 'user');
-  const roleIcon = isHarness
-    ? '<i class="bi bi-gear"></i>'
-    : (msg.role === 'assistant' ? '<i class="bi bi-robot"></i>' : '<i class="bi bi-person"></i>');
-  const roleText = isHarness ? 'Harness' : (msg.role === 'assistant' ? 'Assistant' : 'User');
+  const thinkingClass = hasThinking ? ' thinking' : '';
+  const toolClass = isToolCallMessage ? ' tool-call-message' : (isToolResultMessage ? ' tool-result-message' : '');
+
+  const roleIcon = isToolCallMessage
+    ? '<i class="bi bi-wrench"></i>'
+    : isToolResultMessage
+      ? '<i class="bi bi-box-arrow-right"></i>'
+      : (hasThinking
+          ? '<i class="bi bi-lightbulb"></i>'
+          : (isHarness
+              ? '<i class="bi bi-gear"></i>'
+              : (msg.role === 'assistant' ? '<i class="bi bi-robot"></i>' : '<i class="bi bi-person"></i>')));
+
+  const roleText = isToolCallMessage
+    ? 'Tool Call'
+    : isToolResultMessage
+      ? 'Tool Result'
+      : (hasThinking
+          ? 'Thinking'
+          : (isHarness ? 'Harness' : (msg.role === 'assistant' ? 'Assistant' : 'User')));
 
   const contentHtml = msg.content.map(renderContent).join('\n');
 
   const usageHtml = msg.usage
-    ? `<div class="message-usage">${renderTokenUsage(msg.usage)}</div>`
+    ? `<div class="message-usage">${renderTokenUsage(msg.usage, source)}</div>`
     : '';
 
   const modelHtml = msg.model
@@ -274,7 +395,7 @@ function renderMessage(msg: ChatMessage): string {
   const hiddenClass = isHarness ? ' hidden' : '';
 
   return `
-    <div class="message ${roleClass}${hiddenClass}">
+    <div class="message ${roleClass}${thinkingClass}${toolClass}${hiddenClass}">
       <div class="message-header">
         <span class="role">${roleIcon} ${roleText}</span>
         ${modelHtml}
@@ -507,6 +628,11 @@ function getStyles(theme?: ThemeConfig): string {
       opacity: 0.7;
     }
 
+    .message.thinking {
+      border-left-style: dashed;
+      opacity: 0.9;
+    }
+
     .message-header {
       display: flex;
       align-items: center;
@@ -635,6 +761,11 @@ function getStyles(theme?: ThemeConfig): string {
 
     .message-text em {
       font-style: italic;
+    }
+
+    .thinking-text {
+      font-style: italic;
+      color: var(--text-secondary);
     }
 
     .message-usage {
@@ -811,6 +942,11 @@ function getStyles(theme?: ThemeConfig): string {
       z-index: 100;
     }
 
+    .filter-bar.stuck {
+      border-top-left-radius: 0;
+      border-top-right-radius: 0;
+    }
+
     .filter-bar::before {
       content: '';
       position: absolute;
@@ -819,12 +955,6 @@ function getStyles(theme?: ThemeConfig): string {
       right: -20px;
       height: 20px;
       background: var(--bg-primary);
-    }
-
-    .filter-bar .filter-label {
-      font-size: 0.85rem;
-      color: var(--text-secondary);
-      font-weight: 500;
     }
 
     .filter-toggles {
@@ -882,12 +1012,24 @@ function getStyles(theme?: ThemeConfig): string {
       border-color: var(--text-secondary);
     }
 
+    .filter-toggle.active.thinking-toggle {
+      background: var(--text-secondary);
+      border-color: var(--text-secondary);
+    }
+
     .filter-toggle input {
       display: none;
     }
 
     .filter-toggle i {
       font-size: 1rem;
+    }
+
+    .search-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
     }
 
     /* Hidden states for filtering */
@@ -956,11 +1098,39 @@ function getStyles(theme?: ThemeConfig): string {
       background: var(--bg-overlay-dark);
     }
 
+    .mode-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      cursor: pointer;
+      color: var(--text-secondary);
+      transition: all 0.2s ease;
+    }
+
+    .mode-btn:hover {
+      background: var(--bg-overlay-dark);
+      color: var(--text-primary);
+    }
+
+    .mode-btn.active {
+      background: var(--accent-assistant);
+      border-color: var(--accent-assistant);
+      color: var(--bg-primary);
+    }
+
+    .mode-btn i {
+      font-size: 1rem;
+    }
+
     /* Navigation buttons */
     .nav-buttons {
       display: flex;
-      gap: 8px;
-      margin-left: auto;
+      gap: 6px;
     }
 
     .nav-btn {
@@ -987,7 +1157,7 @@ function getStyles(theme?: ThemeConfig): string {
 }
 
 export function generateHtml(session: ChatSession, theme?: ThemeConfig): string {
-  const messagesHtml = session.messages.map(renderMessage).join('\n');
+  const messagesHtml = flattenMessages(session.messages).map(msg => renderMessage(msg, session.source)).join('\n');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1047,12 +1217,11 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
       </div>
       <div class="token-summary">
         <strong>Total Tokens:</strong>
-        ${renderTokenUsage(session.totalUsage)}
+        ${renderTokenUsage(session.totalUsage, session.source)}
       </div>
     </header>
 
     <div class="filter-bar">
-      <span class="filter-label">Show:</span>
       <div class="filter-toggles">
         <label class="filter-toggle user-toggle active" data-filter="user">
           <input type="checkbox" checked>
@@ -1079,20 +1248,25 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
           <i class="bi bi-gear"></i>
           <span>Harness</span>
         </label>
-        <label class="filter-toggle mode-toggle active" id="markdown-toggle">
-          <input type="checkbox" checked>
-          <i class="bi bi-markdown"></i>
-          <span>Markdown</span>
+        <label class="filter-toggle thinking-toggle" data-filter="thinking">
+          <input type="checkbox">
+          <i class="bi bi-lightbulb"></i>
+          <span>Thinking</span>
         </label>
       </div>
-      <div class="search-box">
-        <i class="bi bi-search"></i>
-        <input type="text" id="search-input" placeholder="Filter messages..." />
-        <button id="search-clear" class="search-clear" title="Clear search"><i class="bi bi-x"></i></button>
-      </div>
-      <div class="nav-buttons">
-        <button class="nav-btn" id="scroll-top" title="Scroll to top"><i class="bi bi-chevron-up"></i></button>
-        <button class="nav-btn" id="scroll-bottom" title="Scroll to bottom"><i class="bi bi-chevron-down"></i></button>
+      <div class="search-group">
+        <button class="mode-btn active" id="markdown-toggle" title="Toggle Markdown view">
+          <i class="bi bi-markdown"></i>
+        </button>
+        <div class="search-box">
+          <i class="bi bi-search"></i>
+          <input type="text" id="search-input" placeholder="Filter messages..." />
+          <button id="search-clear" class="search-clear" title="Clear search"><i class="bi bi-x"></i></button>
+        </div>
+        <div class="nav-buttons">
+          <button class="nav-btn" id="scroll-top" title="Scroll to top"><i class="bi bi-chevron-up"></i></button>
+          <button class="nav-btn" id="scroll-bottom" title="Scroll to bottom"><i class="bi bi-chevron-down"></i></button>
+        </div>
       </div>
     </div>
 
@@ -1108,14 +1282,23 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
         assistant: true,
         'tool-call': true,
         'tool-result': true,
-        harness: false
+        harness: false,
+        thinking: false
       };
       let searchTerm = '';
 
+      const filterBar = document.querySelector('.filter-bar');
       const searchInput = document.getElementById('search-input');
       const searchClear = document.getElementById('search-clear');
       const searchBox = searchInput.parentElement;
       let markdownEnabled = true;
+
+      function updateStickyState() {
+        if (!filterBar) return;
+        const rect = filterBar.getBoundingClientRect();
+        const stuck = rect.top <= 0;
+        filterBar.classList.toggle('stuck', stuck);
+      }
 
       function applyFilters() {
         const term = searchTerm.toLowerCase();
@@ -1125,10 +1308,19 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
           const isUser = el.classList.contains('user');
           const isAssistant = el.classList.contains('assistant');
           const isHarness = el.classList.contains('harness');
+          const isThinking = el.classList.contains('thinking');
+          const isToolCallMessage = el.classList.contains('tool-call-message');
+          const isToolResultMessage = el.classList.contains('tool-result-message');
 
           // Check type filter
           let typeVisible = true;
-          if (isHarness) {
+          if (isToolCallMessage) {
+            typeVisible = filters['tool-call'];
+          } else if (isToolResultMessage) {
+            typeVisible = filters['tool-result'];
+          } else if (isThinking) {
+            typeVisible = filters.thinking;
+          } else if (isHarness) {
             typeVisible = filters.harness;
           } else if (isUser) {
             typeVisible = filters.user;
@@ -1143,29 +1335,21 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
             searchVisible = text.includes(term);
           }
 
-          // Check if message has visible content after tool filtering
-          const messageContent = el.querySelector('.message-content');
-          const hasText = messageContent && messageContent.querySelector('.message-text');
-          const hasToolCalls = messageContent && messageContent.querySelectorAll('.tool-call').length > 0;
-          const hasToolResults = messageContent && messageContent.querySelectorAll('.tool-result-container').length > 0;
-
-          // If message only has tool calls/results and those are filtered out, hide the message
-          let hasVisibleContent = true;
-          if (!hasText) {
-            const toolCallsVisible = hasToolCalls && filters['tool-call'];
-            const toolResultsVisible = hasToolResults && filters['tool-result'];
-            hasVisibleContent = toolCallsVisible || toolResultsVisible;
-          }
-
-          el.classList.toggle('hidden', !typeVisible || !searchVisible || !hasVisibleContent);
+          el.classList.toggle('hidden', !typeVisible || !searchVisible);
         });
 
         // Filter tool calls and results within visible messages
         document.querySelectorAll('.tool-call').forEach(function(el) {
+          const container = el.closest('.message');
+          const isTopLevelToolMessage = container && (container.classList.contains('tool-call-message') || container.classList.contains('tool-result-message'));
+          if (isTopLevelToolMessage) return;
           el.classList.toggle('hidden', !filters['tool-call']);
         });
 
         document.querySelectorAll('.tool-result-container').forEach(function(el) {
+          const container = el.closest('.message');
+          const isTopLevelToolMessage = container && (container.classList.contains('tool-call-message') || container.classList.contains('tool-result-message'));
+          if (isTopLevelToolMessage) return;
           el.classList.toggle('hidden', !filters['tool-result']);
         });
       }
@@ -1202,10 +1386,6 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
           e.preventDefault();
           markdownEnabled = !markdownEnabled;
           markdownToggle.classList.toggle('active', markdownEnabled);
-          var input = markdownToggle.querySelector('input');
-          if (input) {
-            input.checked = markdownEnabled;
-          }
           applyMarkdownMode();
         });
       }
@@ -1234,6 +1414,9 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
           applyFilters();
         }
       });
+
+      // Update sticky state on scroll
+      window.addEventListener('scroll', updateStickyState);
 
       // Scroll buttons
       document.getElementById('scroll-top').addEventListener('click', function() {
@@ -1283,8 +1466,12 @@ export function generateHtml(session: ChatSession, theme?: ThemeConfig): string 
 
       if (document.readyState === 'complete') {
         setupExpandToggles();
+        updateStickyState();
       } else {
-        window.addEventListener('load', setupExpandToggles);
+        window.addEventListener('load', function() {
+          setupExpandToggles();
+          updateStickyState();
+        });
       }
 
       applyMarkdownMode();

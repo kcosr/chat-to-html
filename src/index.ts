@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { parseFile } from './parsers/index.js';
 import { generateHtml } from './html-generator.js';
-import { ParseOptions, ThemeConfig } from './types.js';
+import { ParseOptions, ThemeConfig, getTotalTokens } from './types.js';
 
 function showUsage(): void {
   console.log(`
@@ -63,7 +63,7 @@ function processFile(inputPath: string, outputDir?: string, options?: ParseOptio
     console.log(`  Source: ${session.source}`);
     console.log(`  Session ID: ${session.sessionId}`);
     console.log(`  Messages: ${session.messages.length}`);
-    console.log(`  Total tokens: ${session.totalUsage.inputTokens + session.totalUsage.outputTokens}`);
+    console.log(`  Total tokens: ${getTotalTokens(session.totalUsage, session.source)}`);
 
     const html = generateHtml(session, theme);
 

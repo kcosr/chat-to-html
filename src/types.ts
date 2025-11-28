@@ -20,7 +20,7 @@ export interface ToolResult {
 }
 
 export interface MessageContent {
-  type: 'text' | 'tool_use' | 'tool_result';
+  type: 'text' | 'tool_use' | 'tool_result' | 'thinking';
   text?: string;
   toolCall?: ToolCall;
   toolResult?: ToolResult;
@@ -79,4 +79,22 @@ export interface ThemeConfig {
 export interface Parser {
   canParse(firstLine: string): boolean;
   parse(content: string, options?: ParseOptions): ChatSession;
+}
+
+/**
+ * Calculate total tokens based on source type.
+ * - Claude: input_tokens is non-cached, cache tokens are separate and should be added
+ * - Codex: input_tokens already includes cached tokens, cache_read is informational only
+ */
+export function getTotalTokens(
+  usage: TokenUsage,
+  source: 'claude' | 'codex' | 'gemini' | 'unknown'
+): number {
+  let total = usage.inputTokens + usage.outputTokens;
+  if (source === 'claude' || source === 'gemini' || source === 'unknown') {
+    // For Claude-style APIs, cache tokens are separate from input_tokens
+    total += (usage.cacheCreationTokens || 0) + (usage.cacheReadTokens || 0);
+  }
+  // For Codex, input_tokens already includes cached, so no addition needed
+  return total;
 }

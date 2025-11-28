@@ -21,7 +21,8 @@ chat-to-html takes JSONL log files from AI coding assistants and generates stand
 - Markdown rendering in messages (headers, lists, code blocks, links)
 - Tool call and result visualization with syntax highlighting
 - Token usage tracking (input, output, cache)
-- Filter toggles to show/hide message types (including harness messages)
+- Filter toggles to show/hide message types (User, Assistant, Tool Calls, Tool Results, Harness, Thinking)
+- Optional reasoning/metadata view for advanced logs (Codex agent reasoning and Claude thinking/todo metadata as harness messages, hidden by default)
 - Session metadata display (model, branch, working directory)
 
 ## Installation
@@ -113,8 +114,14 @@ The HTML includes:
 
 - **Header** - Session ID, model, version, working directory, git branch, message count
 - **Token Summary** - Total input/output tokens with cache statistics
-- **Filter Bar** - Toggle visibility of users, assistants, tool calls, tool results, and harness messages
+- **Filter Bar** - Toggle visibility of users, assistants, tool calls, tool results, harness messages, and Thinking messages (Codex reasoning / Claude thinking metadata)
 - **Messages** - Chronological chat history with timestamps and per-message token counts
+
+### Harness & Thinking messages
+
+- **Harness** messages represent orchestration or harness-level metadata (e.g., todo updates, tool orchestration logs) and are detected by default.
+- **Thinking** messages represent model reasoning snippets (Codex `agent_reasoning` events and Claude thinking metadata when available).
+- Both are treated as optional annotations: they are hidden by default in the HTML and can be revealed via the Harness/Thinking filter pills, or fully suppressed at parse time with `--no-identify-harness`.
 
 ## License
 
