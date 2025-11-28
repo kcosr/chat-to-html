@@ -26,7 +26,16 @@ interface ClaudeTextContent {
   text: string;
 }
 
-type ClaudeContent = ClaudeTextContent | ClaudeToolUse | ClaudeToolResult;
+interface ClaudeThinkingContent {
+  type: 'thinking';
+  thinking: string;
+}
+
+type ClaudeContent =
+  | ClaudeTextContent
+  | ClaudeToolUse
+  | ClaudeToolResult
+  | ClaudeThinkingContent;
 
 interface ClaudeThinkingMetadata {
   level?: string;
@@ -243,6 +252,11 @@ export class ClaudeParser implements Parser {
     return content.map(item => {
       if (item.type === 'text') {
         return { type: 'text' as const, text: item.text };
+      } else if (item.type === 'thinking') {
+        return {
+          type: 'thinking' as const,
+          text: item.thinking,
+        };
       } else if (item.type === 'tool_use') {
         return {
           type: 'tool_use' as const,

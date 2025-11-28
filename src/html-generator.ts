@@ -767,7 +767,6 @@ function getStyles(theme?: ThemeConfig): string {
 
     .thinking-text {
       font-style: italic;
-      color: var(--accent-thinking);
     }
 
     .message-usage {
