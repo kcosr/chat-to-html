@@ -70,6 +70,8 @@ export interface ThemeConfig {
   accentAssistant?: string;  // Assistant message border
   accentTool?: string;       // Tool call headers, inline code
   accentResult?: string;     // Tool result headers
+  accentHarness?: string;    // Harness messages and filter pills
+  accentThinking?: string;   // Thinking messages and filter pills
 
   // Fonts
   fontUi?: string;       // UI font family

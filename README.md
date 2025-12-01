@@ -34,8 +34,11 @@ cd chat-to-html
 # Install dependencies
 npm install
 
-# Build
+# Build with TypeScript
 npm run build
+
+# Or build with Bun (faster, outputs dist/chat-to-html.js)
+npm run build:bun
 ```
 
 ## Usage
@@ -68,6 +71,7 @@ node dist/index.js \
 |--------|-------------|
 | `-h, --help` | Show help message |
 | `-o, --output <dir>` | Output directory (default: same as input file) |
+| `--output-file <file>` | Write HTML to an explicit file path (mutually exclusive with `-o/--output`) |
 | `--no-identify-harness` | Disable harness message detection (enabled by default) |
 
 ### Theme Options
@@ -86,6 +90,8 @@ All color options accept hex values (e.g., `"#1a1a2e"`):
 | `--accent-assistant` | Assistant message border |
 | `--accent-tool` | Tool call headers, inline code |
 | `--accent-result` | Tool result headers |
+| `--accent-harness` | Harness messages and filter pills |
+| `--accent-thinking` | Thinking messages and filter pills |
 
 ### Font Options
 
@@ -94,7 +100,7 @@ All color options accept hex values (e.g., `"#1a1a2e"`):
 | `--font-ui` | UI font family (prepended to system fallbacks) |
 | `--font-code` | Code font family (prepended to monospace fallbacks) |
 
-Output HTML files are created alongside the input files (or in the specified output directory) with the same name but `.html` extension.
+Output HTML files are created alongside the input files (or in the specified output directory) with the same name but `.html` extension, or written to an explicit path when using `--output-file`.
 
 ## Example Files
 

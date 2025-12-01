@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { basename, dirname, join } from 'path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'fs';
+import { basename, dirname, join, resolve } from 'path';
 import { parseFile } from './parsers/index.js';
 import { generateHtml } from './html-generator.js';
 import { ParseOptions, ThemeConfig, getTotalTokens } from './types.js';
@@ -16,6 +16,7 @@ Usage:
 Options:
   -h, --help             Show this help message
   -o, --output           Output directory (default: same as input file)
+  --output-file          Explicit output file path (mutually exclusive with -o/--output)
   --no-identify-harness  Disable harness message detection (enabled by default)
 
 Theme options (hex colors, e.g. "#1a1a2e"):
@@ -29,6 +30,8 @@ Theme options (hex colors, e.g. "#1a1a2e"):
   --accent-assistant   Assistant message border
   --accent-tool        Tool call headers, inline code
   --accent-result      Tool result headers
+  --accent-harness     Harness messages and filter pills
+  --accent-thinking    Thinking messages and filter pills
 
 Font options:
   --font-ui            UI font family (e.g. "Inter")
@@ -38,6 +41,7 @@ Examples:
   chat-to-html session.jsonl
   chat-to-html session1.jsonl session2.jsonl
   chat-to-html -o ./output session.jsonl
+  chat-to-html --output-file ./report.html session.jsonl
   chat-to-html --no-identify-harness codex-session.jsonl
   chat-to-html --bg-page "#0B1220" --accent-user "#38BDF8" session.jsonl
 
@@ -48,7 +52,13 @@ Supported formats:
 `);
 }
 
-function processFile(inputPath: string, outputDir?: string, options?: ParseOptions, theme?: ThemeConfig): boolean {
+function processFile(
+  inputPath: string,
+  outputDir?: string,
+  outputFile?: string,
+  options?: ParseOptions,
+  theme?: ThemeConfig,
+): boolean {
   console.log(`Processing: ${inputPath}`);
 
   if (!existsSync(inputPath)) {
@@ -69,13 +79,39 @@ function processFile(inputPath: string, outputDir?: string, options?: ParseOptio
 
     // Generate output filename
     const inputBasename = basename(inputPath, '.jsonl');
-    const outputPath = join(
+    const defaultOutputPath = join(
       outputDir || dirname(inputPath),
-      `${inputBasename}.html`
+      `${inputBasename}.html`,
     );
 
-    writeFileSync(outputPath, html);
-    console.log(`  Output: ${outputPath}\n`);
+    const finalOutputPath = outputFile || defaultOutputPath;
+
+    if (outputFile) {
+      try {
+        if (existsSync(finalOutputPath)) {
+          const stats = statSync(finalOutputPath);
+          if (stats.isDirectory()) {
+            console.error(`  Error: Output path is a directory: ${finalOutputPath}\n`);
+            return false;
+          }
+        } else {
+          const parentDir = dirname(finalOutputPath);
+          if (parentDir && parentDir !== '.') {
+            mkdirSync(parentDir, { recursive: true });
+          }
+        }
+      } catch (err) {
+        console.error(
+          `  Error preparing output file: ${
+            err instanceof Error ? err.message : String(err)
+          }\n`,
+        );
+        return false;
+      }
+    }
+
+    writeFileSync(finalOutputPath, html);
+    console.log(`  Output: ${finalOutputPath}\n`);
     return true;
   } catch (err) {
     console.error(`  Error: ${err instanceof Error ? err.message : String(err)}\n`);
@@ -95,6 +131,8 @@ const themeFlags: Record<string, keyof ThemeConfig> = {
   '--accent-assistant': 'accentAssistant',
   '--accent-tool': 'accentTool',
   '--accent-result': 'accentResult',
+  '--accent-harness': 'accentHarness',
+  '--accent-thinking': 'accentThinking',
   '--font-ui': 'fontUi',
   '--font-code': 'fontCode',
 };
@@ -108,7 +146,9 @@ function main(): void {
   }
 
   // Parse arguments
+  const exclusiveFlagError = 'Error: --output-file and -o/--output are mutually exclusive';
   let outputDir: string | undefined;
+  let outputFile: string | undefined;
   let identifyHarness = true;
   const files: string[] = [];
   const theme: ThemeConfig = {};
@@ -116,11 +156,26 @@ function main(): void {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '-o' || arg === '--output') {
+      if (outputFile) {
+        console.error(exclusiveFlagError);
+        process.exit(1);
+      }
       outputDir = args[++i];
       if (!outputDir) {
         console.error('Error: -o/--output requires a directory path');
         process.exit(1);
       }
+    } else if (arg === '--output-file') {
+      if (outputDir) {
+        console.error(exclusiveFlagError);
+        process.exit(1);
+      }
+      const value = args[++i];
+      if (!value) {
+        console.error('Error: --output-file requires a file path');
+        process.exit(1);
+      }
+      outputFile = resolve(process.cwd(), value);
     } else if (arg === '--no-identify-harness') {
       identifyHarness = false;
     } else if (themeFlags[arg]) {
@@ -144,6 +199,11 @@ function main(): void {
     process.exit(1);
   }
 
+  if (outputFile && files.length > 1) {
+    console.error('Error: --output-file can only be used with a single input file');
+    process.exit(1);
+  }
+
   const options: ParseOptions = { identifyHarness };
   const hasTheme = Object.keys(theme).length > 0;
 
@@ -151,7 +211,13 @@ function main(): void {
 
   let hasErrors = false;
   for (const file of files) {
-    const success = processFile(file, outputDir, options, hasTheme ? theme : undefined);
+    const success = processFile(
+      file,
+      outputDir,
+      outputFile,
+      options,
+      hasTheme ? theme : undefined,
+    );
     if (!success) {
       hasErrors = true;
     }

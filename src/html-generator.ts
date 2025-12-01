@@ -443,7 +443,8 @@ function getStyles(theme?: ThemeConfig): string {
   const accentAssistant = theme?.accentAssistant || '#e29d33';
   const accentTool = theme?.accentTool || '#c5b357';
   const accentResult = theme?.accentResult || '#76854a';
-  const accentThinking = '#0C4767';
+  const accentHarness = theme?.accentHarness || textMuted;
+  const accentThinking = theme?.accentThinking || '#0C4767';
 
   // Font families with fallbacks
   const defaultUiFont = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif";
@@ -485,6 +486,7 @@ function getStyles(theme?: ThemeConfig): string {
       --accent-assistant: ${accentAssistant};
       --accent-tool: ${accentTool};
       --accent-tool-result: ${accentResult};
+      --accent-harness: ${accentHarness};
       --accent-thinking: ${accentThinking};
 
       /* Border */
@@ -626,12 +628,12 @@ function getStyles(theme?: ThemeConfig): string {
     }
 
     .message.harness {
-      border-left: 4px solid var(--text-secondary);
+      border-left: 4px solid var(--accent-harness);
       opacity: 0.7;
     }
 
     .message.thinking {
-      border-left-style: dashed;
+      border-left: 4px dashed var(--accent-thinking);
       opacity: 0.9;
     }
 
@@ -1009,8 +1011,8 @@ function getStyles(theme?: ThemeConfig): string {
     }
 
     .filter-toggle.active.harness-toggle {
-      background: var(--text-secondary);
-      border-color: var(--text-secondary);
+      background: var(--accent-harness);
+      border-color: var(--accent-harness);
     }
 
     .filter-toggle.active.thinking-toggle {
